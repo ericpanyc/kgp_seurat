@@ -1,0 +1,12 @@
+# Ignore Mac system files
+.DS_store
+
+results
+
+data
+
+.RData
+
+.Rhistory
+
+
