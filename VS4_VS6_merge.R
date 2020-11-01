@@ -31,6 +31,7 @@ library(janitor)
 library(ggpubr)
 library(rstatix)
 library(RColorBrewer)
+library(circlize)
 
 
 setwd("/Users/ericpan/Documents/pan/usc/kgp/seurat")
@@ -273,7 +274,7 @@ cluster_go_annotation <- lapply(cluster_go_annotation, function(i) i[[1]])
 names(cluster_go_annotation) <- c(0:(length(cluster_go_annotation)-1))
 df_go_annotation <- as.data.frame(cluster_go_annotation)
 colnames(df_go_annotation) <- paste0("cluster",c(0:(length(cluster_go_annotation)-1)))
-# rite.xlsx(df_go_annotation, "results/reso_1.0/cystic_46_cluster_GO_pathway.xlsx", row.names = F)
+# write.xlsx(df_go_annotation, "results/reso_1.0/cystic_46_cluster_GO_pathway.xlsx", row.names = F)
 
 
 cluster9.markers <- FindMarkers(seurat_integrated, ident.1 = 9, min.pct = 0.25)

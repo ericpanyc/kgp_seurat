@@ -5,7 +5,7 @@ library(tibble)
 library(AnnotationHub)
 library(limma)
 
-setwd("/Users/lufeixiaoxin/Downloads/usc_folder/kgp/seurat")
+setwd("/Users/ericpan/Documents/pan/usc/kgp/seurat")
 
 
 ## Get annotation information
@@ -25,7 +25,8 @@ annotations <- annotations %>%
 annotations$entrezid <- as.character(annotations$entrezid)
 
 ## Read in 10x outputs direcotry and make seurat object (barcodes, features, matrix)
-VS4.data <- Read10X(data.dir = "/Users/lufeixiaoxin/Downloads/usc_folder/kgp/seurat/VS4_filtered_feature_bc_matrix")
+VS4.data <- Read10X(data.dir = "data/VS4_filtered_feature_bc_matrix")
+
 VS4 <- CreateSeuratObject(counts = VS4.data, project = "VS4", min.cells = 3, min.features = 200)
 
 # Find mitochondrial genes

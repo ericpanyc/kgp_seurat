@@ -41,8 +41,8 @@ all_genes <- rownames(ave_data)
 marker_gene_tb <- read.csv("data/marker_gene_table.csv",sep = ",", header = T,na.strings=c("","NA"))
 af_up <- marker_gene_tb$AF_up[1:17]
 af_down <- marker_gene_tb$AF_down[1:28]
-target_gene <- c(af_up, af_down)
-filter <- all_genes %in% target_gene
+target_gene_full <- c(af_up, af_down)
+filter <- all_genes %in% target_gene_full
 gene_table <- ave_data[filter,]
 dim(gene_table)
 

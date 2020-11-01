@@ -1,0 +1,183 @@
+---
+title: "Schwannoma sample VS4 analysis"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_knit$set(root.dir = "/Users/ericpan/Documents/pan/usc/kgp/seurat/notebook")
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+Load packages needed and set system environment
+```{r, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tibble)
+library(AnnotationHub)
+library(limma)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(scales)
+library(RCurl)
+library(purrr)
+library(metap)
+library(multtest)
+library(xlsx)
+library(ggpubr)
+library(clustree)
+library(DESeq)
+library(DESeq2)
+library(ComplexHeatmap)
+library(pheatmap)
+library(reticulate)
+library(SingleR)
+library(scRNAseq)
+library(scater)
+library(DropletUtils)
+library(stringr)
+library(data.table)
+library(janitor)
+library(ggpubr)
+library(rstatix)
+library(RColorBrewer)
+library(circlize)
+use_python("/Users/ericpan/opt/miniconda3/bin/python3")
+hpca.se <- HumanPrimaryCellAtlasData()
+options(future.globals.maxSize = 4000 * 1024^2)
+```
+
+Get annotation information, gene name, entrez id and gene id
+```{r}
+ah <- AnnotationHub()
+ahDb <- query(ah, 
+              pattern = c("Homo sapiens", "EnsDb"), 
+              ignore.case = TRUE)
+id <- ahDb %>%
+        mcols() %>%
+        rownames() %>%
+        tail(n = 1)
+edb <- ah[[id]]
+annotations <- genes(edb, 
+                     return.type = "data.frame")
+annotations <- annotations %>%
+        dplyr::select(gene_id, gene_name, entrezid,description)
+annotations$entrezid <- as.character(annotations$entrezid)
+
+head(annotations, 10)
+```
+
+Read in 10x outputs direcotry and make seurat object (barcodes, features, matrix)
+```{r}
+VS4.data <- Read10X(data.dir = "/Users/ericpan/Documents/pan/usc/kgp/seurat/data/VS4_filtered_feature_bc_matrix")
+VS4 <- CreateSeuratObject(counts = VS4.data, project = "VS4", min.features = 100)
+
+VS4
+```
+
+QC and selecting cells for further analysis
+```{r}
+#Find mitochondrial genes
+VS4[["percent.mt"]] <- PercentageFeatureSet(VS4, pattern = "^MT-")
+#Visualize basic information of the dataset
+VlnPlot(VS4, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+Remove outliers in the dataset
+```{r}
+VS4 <- subset(VS4, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 20)
+```
+
+Gene level filtering
+```{r}
+# Gene level filtering
+counts <- GetAssayData(object = VS4, slot = "counts")
+nonzero <- counts > 0
+keep_genes <- Matrix::rowSums(nonzero) >= 10
+filtered_counts <- counts[keep_genes, ]
+VS4 <- CreateSeuratObject(filtered_counts, meta.data = VS4@meta.data)
+VS4
+```
+
+Perform SCTransform on the sample
+```{r}
+VS4 <- SCTransform(VS4, vars.to.regress = "percent.mt", verbose = FALSE)
+# Note there is a new SCT assay now
+VS4@assays
+```
+
+
+Perform dimensionality reduction by PCA and UMAP embedding
+```{r, fig.align = "center"}
+VS4 <- RunPCA(VS4, verbose = FALSE)
+VS4 <- RunUMAP(VS4, dims = 1:30, umap.method = 'umap-learn', metric = 'correlation', verbose = F)
+
+VS4 <- FindNeighbors(VS4, dims = 1:30, verbose = FALSE)
+VS4 <- FindClusters(VS4, resolution = c(0,0.1,0.4,0.6,1.0), verbose = FALSE)
+# Take a look at the clustering result
+DimPlot(VS4, label = TRUE) + NoLegend()
+```
+
+Use Clustree function to see the cluster change while increasing the resolution
+```{r, fig.align = "center", fig.width= 5, fig.asp = 1.4, eval=F}
+clustree(VS4, prefix = "SCT_snn_res.")
+```
+
+Let's say we'd like to use 0.4 resolution to do the downstream analysis
+```{r}
+# Set the clustering resolution to 0.4
+required_reso <- "SCT_snn_res.0.4"
+Idents(object = VS4) <- required_reso
+# Use SingleR package to do preliminary annotation on each cluster
+DefaultAssay(VS4) <- "RNA"
+VS4@meta.data$cells <- rownames(VS4@meta.data)
+VS4.sc <- as.SingleCellExperiment(VS4)
+colnames(VS4.sc) <- colData(VS4.sc)$cells
+VS4.sc
+```
+
+Cluster level annotation using fine lables in singleR
+```{r}
+# cluster level annotation fine labels
+pred.cluster_fine <- SingleR(test = VS4.sc, ref = hpca.se, labels = hpca.se$label.fine, method = "cluster", clusters = VS4@meta.data$SCT_snn_res.0.4)
+cluster_anno <- pred.cluster_fine$labels
+names(cluster_anno) <- paste0("cluster",c(0:(length(cluster_anno)-1)))
+cluster_anno <- as.data.frame(cluster_anno)
+head(cluster_anno)
+```
+
+Cell level annotation
+```{r}
+# Get all cell ids in a cluster
+cluster_barcode <- lapply(levels(VS4@meta.data$SCT_snn_res.0.4), function(i) VS4@meta.data[which(VS4@meta.data$SCT_snn_res.0.4 == i),"cells"])
+pred.cell_fine <- sapply(cluster_barcode, function(i) VS4.sc[,i] %>% SingleR(ref = hpca.se, labels = hpca.se$label.fine))
+cell_fine_labels <- sapply(pred.cell_fine, function(i) table(i$labels) %>% as.data.frame() %>% 
+                        arrange(desc(Freq)) %>% pull(1) %>% as.character() %>% head(3)) %>% as.data.frame()
+cell_fine_labels <- t(cell_fine_labels) %>% as.data.frame()
+rownames(cell_fine_labels) <- paste0("cluster", c(0:(length(cluster_barcode)-1)))
+cell_fine_labels[1:5,]
+```
+
+Find cluster marker genes
+```{r}
+Idents(VS4) <- "SCT_snn_res.0.4"
+all_markers <- FindAllMarkers(object = VS4, 
+                          only.pos = TRUE,
+                          logfc.threshold = 0.20,
+                          verbose = FALSE)
+top30_markers <- all_markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_logFC)
+top30_markers <- left_join(x = top30_markers, y = unique(annotations[, c("gene_name", "description","entrezid")]),
+                                 by = c("gene" = "gene_name")) %>% as.data.frame()
+top30_markers[1:5,]
+```
+
+

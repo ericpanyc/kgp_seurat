@@ -1,0 +1,208 @@
+---
+title: "Schwannoma sample VS4 analysis part 2"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_knit$set(root.dir = "/Users/ericpan/Documents/pan/usc/kgp/seurat/notebook")
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+
+```{r, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tibble)
+library(AnnotationHub)
+library(limma)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(scales)
+library(RCurl)
+library(purrr)
+library(metap)
+library(multtest)
+library(xlsx)
+library(ggpubr)
+library(clustree)
+library(DESeq)
+library(DESeq2)
+library(ComplexHeatmap)
+library(pheatmap)
+library(reticulate)
+library(SingleR)
+library(scRNAseq)
+library(scater)
+library(DropletUtils)
+library(stringr)
+library(data.table)
+library(janitor)
+library(ggpubr)
+library(rstatix)
+library(RColorBrewer)
+library(circlize)
+use_python("/usr/local/bin/python3")
+hpca.se <- HumanPrimaryCellAtlasData()
+options(future.globals.maxSize = 4000 * 1024^2)
+
+ah <- AnnotationHub()
+ahDb <- query(ah, 
+              pattern = c("Homo sapiens", "EnsDb"), 
+              ignore.case = TRUE)
+id <- ahDb %>%
+        mcols() %>%
+        rownames() %>%
+        tail(n = 1)
+edb <- ah[[id]]
+annotations <- genes(edb, 
+                     return.type = "data.frame")
+annotations <- annotations %>%
+        dplyr::select(gene_id, gene_name, entrezid,description)
+annotations$entrezid <- as.character(annotations$entrezid)
+```
+
+```{r include=FALSE}
+VS4 <- readRDS("/Users/ericpan/Documents/pan/usc/kgp/seurat/notebook/data/VS4.RDS")
+DefaultAssay(VS4) <- "SCT"
+all_markers <- readRDS("/Users/ericpan/Documents/pan/usc/kgp/seurat/notebook/data/vs4_0.4_sct_all_markers.RDS")
+top30_markers <- readRDS("/Users/ericpan/Documents/pan/usc/kgp/seurat/notebook/data/vs4_0.4_sct_top30_markers.RDS")
+```
+
+
+
+Use GO to do the pathway enrichment analysis
+```{r}
+markers_by_cluster <- lapply(unique(top30_markers$cluster), function(i) top30_markers[top30_markers$cluster == i,9])
+cluster_go_annotation <- lapply(markers_by_cluster, function(i) goana(i) %>% topGO(n=15))
+cluster_go_annotation <- lapply(cluster_go_annotation, function(i) i[[1]])
+names(cluster_go_annotation) <- c(0:(length(cluster_go_annotation)-1))
+df_go_annotation <- as.data.frame(cluster_go_annotation)
+colnames(df_go_annotation) <- paste0("cluster",c(0:(length(cluster_go_annotation)-1)))
+df_go_annotation[1:10,1:2]
+```
+
+Plot a marker heatmap to check how well the markers can distinguish different clusters
+```{r}
+# We are using the top 10 marker genes here
+top10_markers <- all_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+top10_markers <- left_join(x = top10_markers, y = unique(annotations[, c("gene_name", "description","entrezid")]),
+                                 by = c("gene" = "gene_name"))
+top10_markers <- as.data.frame(top10_markers)
+
+
+required_reso <- "SCT_snn_res.0.4"
+Idents(VS4) <- required_reso
+meta_data <- VS4@meta.data
+dense_table <- VS4[["SCT"]]@data %>% as.matrix()
+
+# Extract expressing data of marker genes only from dense_table, this table will be used for the final heatmap plot
+pheat_data <- dense_table[top10_markers$gene,]
+
+# Build annotation table for row (separate marker genes of different clusters)
+row_anno <- top10_markers[,c("gene","cluster")] %>% data.frame()
+rownames(row_anno) <- make.names(row_anno$gene, unique = T)
+rownames(pheat_data) <- rownames(row_anno)
+row_anno <- row_anno[2]
+names(row_anno) <- "markers"
+
+# Set row gap list (get the number of marker genes in each cluster (accumulative))
+markers_per_cluster <- sapply(unique(row_anno$markers), function(i) sum(row_anno$markers == i))
+current_sum <- 0
+row_gap_list <- sapply(c(1:(length(markers_per_cluster)-1)), function(i) current_sum <<- current_sum + markers_per_cluster[[i]])
+
+# Build annotation table for column (separate cells from different clusters)
+col_anno <- meta_data[,c(required_reso), drop = F]
+col_anno <- col_anno %>% arrange(SCT_snn_res.0.4)
+names(col_anno) <- "cells"
+
+# Set column gap list (get the number of cells in each cluster (accumulative))
+cells_per_cluster <- sapply(unique(col_anno$cells), function(i) sum(col_anno$cells == i))
+current_sum <- 0
+col_gap_list <- sapply(c(1:(length(cells_per_cluster)-1)), function(i) current_sum <<- current_sum + cells_per_cluster[[i]])
+
+# Change the legend names displayed on the heatmap 
+row_anno$markers <- paste0("cluster", row_anno$markers)
+col_anno$cells <- paste0("cluster", col_anno$cells)
+
+# Arrange the pheat_data matrix by the order of col_anno table
+pheat_data <- pheat_data[,rownames(col_anno)]
+
+# Set legend color
+my_colour = list(
+  cells = c(cluster0="#a47d4c",cluster1="#2962ff",cluster2="#c30101",
+            cluster3="#32cd32",cluster4="#7e5aa2",cluster5="#ffd7cd",
+            cluster6="#03989e",cluster7="#c8b9ac",cluster8="#d61b5d",
+            cluster9="#848c2f",cluster10="#bce3dd",cluster11="#383838",
+            cluster12="#a2665c"),
+  markers = c(cluster0="#a47d4c",cluster1="#2962ff",cluster2="#c30101",
+              cluster3="#32cd32",cluster4="#7e5aa2",cluster5="#ffd7cd",
+              cluster6="#03989e",cluster7="#c8b9ac",cluster8="#d61b5d",
+              cluster9="#848c2f",cluster10="#bce3dd",cluster11="#383838",
+              cluster12="#a2665c"))
+pheatmap(pheat_data, annotation_row = row_anno, annotation_col = col_anno, 
+         show_colnames = F, cluster_rows = F, cluster_cols = F,
+         annotation_colors = my_colour, annotation_names_row = F,
+         annotation_legend = T, gaps_row = row_gap_list, fontsize_row = 3,
+         main = "VS4 Cluster Marker Genes Heatmap SCT UMAP 0.4")
+
+```
+In the heatmap above, the column size of small clusters are overwhelmed by clusters of bigger size. So in order to avoid problem like this, we can calculate the average expression of every gene within a cluster before head, and plot the heatmap on the new data table
+```{r}
+# Calculating the average gene expression within a cluster
+cluster.averages <- AverageExpression(VS4, return.seurat = T)
+DefaultAssay(cluster.averages) <- "SCT"
+# Build heatmap data table
+ave_data <- cluster.averages@assays$SCT@scale.data
+gene_table <- ave_data[top10_markers$gene,]
+# Set cell color
+col_fun = colorRamp2(c(-3, 0.5, 4), c("dodgerblue4", "white", "red"))
+# Plot
+Heatmap(gene_table,
+        col = col_fun,
+        name="average_marker_heatmap",
+        show_column_names = TRUE,
+        cluster_rows = FALSE, cluster_columns = F,
+        column_names_rot = 0, column_names_centered = TRUE,
+        row_names_gp = gpar(fontsize = 3, col = "black"))
+```
+
+Besides use FindAllMarkers function to find cluster markers for each cluster, we can use find differentially expressed genes between certain clusters
+```{r}
+DefaultAssay(VS4) <- "SCT"
+# find all markers distinguishing cluster 10 from cluster 1
+cluster_10vs1_diff_genes <- FindMarkers(VS4, ident.1 = 10, ident.2 = 1, min.pct = 0.25, verbose = F)
+cluster_10vs1_diff_genes <- cluster_10vs1_diff_genes %>% arrange(desc(abs(avg_logFC))) %>% rownames_to_column(var="gene") %>% left_join(y = unique(annotations[, c("gene_name", "description","entrezid")]), by = c("gene" = "gene_name")) %>% as.data.frame()
+cluster_10vs1_diff_genes[1:10,]
+```
+
+Once we are confident about the cluster type, we can assign these types to clusters
+```{r}
+new.cluster.ids <- c("Macrophage","Schwann_cell","Macrophage","Macrophage","Macrophage",
+                     "Schwann_cell","Macrophage","Schwann_cell","T_cell","DC",
+                     "Schwann_cell","Endothelial","Proliferating_cell")
+names(new.cluster.ids) <- levels(VS4)
+VS4 <- RenameIdents(VS4, new.cluster.ids)
+DimPlot(VS4, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+If we have some knowledge about the disease, for example we know some genes might play a role in the micro-environment, we could visualize these specific genes' expression by FeaturePlot() function
+```{r}
+FeaturePlot(VS4, reduction = "umap", min.cutoff = 'q10', label = F,
+            cols = c("azure3", "firebrick2"), pt.size = 0.4,
+            features = c("CCL2","MPZ","VEGFB","CXCL10"))
+```
+
+Another way to visualize the expression more quantitatively is using VlnPlot() function
+```{r}
+VlnPlot(VS4, features = c("COL1A1","COL1A2"), pt.size = 0)
+```
+

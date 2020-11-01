@@ -171,6 +171,7 @@ filtered_seurat <- CreateSeuratObject(filtered_counts, meta.data = filtered_seur
 # remove(VS6_filtered_feature_bc_matrix)
 # remove(VS9_filtered_feature_bc_matrix)
 # saveRDS(filtered_seurat, "data/naive_58_filtered_before_integration.RDS")
+naive58 <- readRDS("data/naive_58_filtered_before_integration.RDS")
 
 # Split the merge seurat object
 split_seurat <- SplitObject(filtered_seurat, split.by = "sample")
